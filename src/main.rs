@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use async_std::io::{self, prelude::*};
@@ -8,7 +9,8 @@ use iperf3::{iperf_command, SessionConfig};
 use once_cell::sync::Lazy;
 use serde_json;
 
-static SESSIONS: Lazy<Arc<Mutex<Vec<[u8; 36]>>>> = Lazy::new(|| Arc::new(Mutex::new(vec![])));
+static SESSIONS: Lazy<Arc<Mutex<HashMap<String, SessionConfig>>>> =
+    Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
 
 fn main() -> io::Result<()> {
     task::block_on(async {
@@ -30,7 +32,8 @@ fn main() -> io::Result<()> {
 }
 
 async fn process(stream: TcpStream) -> io::Result<()> {
-    println!("Accepted from: {}", stream.peer_addr()?);
+    let peer_addr = stream.peer_addr()?;
+    println!("Accepted from: {}", peer_addr);
     let mut buf_reader = stream.clone();
     let mut buf_writer = stream;
     // The first thing an iperf3 client will send is
@@ -41,13 +44,50 @@ async fn process(stream: TcpStream) -> io::Result<()> {
     // The string is a C style nul terminated thing, so strip that off.
     session_id.copy_from_slice(&session_id_cstr[..36]);
 
+    // Both client and server need the session cookie, decode it here.
+    let cookie = if session_id_cstr.is_ascii() {
+        Some(core::str::from_utf8(&session_id).unwrap())
+    } else {
+        None
+    };
+
+    if cookie.is_none() {
+        // TODO: better error handling here
+        println!(
+            "Invalid session cookie, dropping connection from {}",
+            peer_addr
+        );
+        return Ok(());
+    }
+
     // If this is the first we've seen this session cookie, assume we're the control channel
-    let control_channel = if session_id_cstr.is_ascii() {
-        println!("cookie: {}", core::str::from_utf8(&session_id).unwrap());
+    let control_channel = if cookie.is_some() {
+        let cookie = String::from(cookie.unwrap());
         let sess = SESSIONS.clone();
-        let existing_session = sess.lock().unwrap().contains(&session_id);
+        let existing_session = sess.lock().unwrap().contains_key(&cookie);
         if !existing_session {
-            sess.lock().unwrap().push(session_id);
+            println!("control channel opened");
+            // need to disable Nagle algorithm to ensure commands are sent promptly
+            buf_writer.set_nodelay(true).unwrap();
+
+            println!("ask the client to send the config parameters");
+            buf_writer
+                .write_all(&[iperf_command::PARAM_EXCHANGE])
+                .await?;
+
+            let mut message_len: [u8; 4] = [0; 4];
+            buf_reader.read_exact(&mut message_len).await?;
+            let message_len = u32::from_be_bytes(message_len);
+            println!("Config JSON length {}", message_len);
+            let mut buf: Vec<u8> = vec![0u8; message_len as usize];
+            buf_reader.read_exact(&mut buf).await?;
+            if buf.is_ascii() {
+                let string = String::from_utf8(buf.to_vec()).unwrap();
+                println!("Config JSON string: {}", string);
+                let s: SessionConfig = serde_json::from_str(string.as_str())?;
+                println!("Config JSON decoded by serde: {:?}", s);
+                sess.lock().unwrap().insert(cookie, s);
+            }
             true
         } else {
             false
@@ -58,29 +98,6 @@ async fn process(stream: TcpStream) -> io::Result<()> {
     };
 
     if control_channel {
-        println!("control channel opened");
-        // need to disable Nagle algorithm to ensure commands are sent promptly
-        buf_writer.set_nodelay(true).unwrap();
-
-        println!("ask the client to send the config parameters (we won't read them)");
-        buf_writer
-            .write_all(&[iperf_command::PARAM_EXCHANGE])
-            .await?;
-
-        let mut message_len: [u8; 4] = [0; 4];
-        buf_reader.read_exact(&mut message_len).await?;
-        let message_len = u32::from_be_bytes(message_len);
-        println!("Config JSON length {}", message_len);
-
-        let mut buf: Vec<u8> = vec![0u8; message_len as usize];
-        buf_reader.read_exact(&mut buf).await?;
-        if buf.is_ascii() {
-            let string = String::from_utf8(buf.to_vec()).unwrap();
-            println!("Config JSON string: {}", string);
-            let s: SessionConfig = serde_json::from_str(string.as_str())?;
-            println!("Config JSON decoded by serde: {:?}", s);
-        }
-
         println!("ask the client to connect to a 2nd socket");
         buf_writer
             .write_all(&[iperf_command::CREATE_STREAMS])
@@ -109,7 +126,7 @@ async fn process(stream: TcpStream) -> io::Result<()> {
             let sess = SESSIONS.clone();
 
             println!("dropping session cookie now");
-            sess.lock().unwrap().retain(|&f| f != session_id);
+            sess.lock().unwrap().remove(&String::from(cookie.unwrap()));
         } else {
             println!("were expecting TEST_END, got {}", reply[0]);
         }
