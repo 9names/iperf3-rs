@@ -4,24 +4,10 @@ use async_std::io::{self, prelude::*};
 use async_std::net::{TcpListener, TcpStream};
 use async_std::prelude::*;
 use async_std::task;
+use iperf3::{iperf_command, SessionConfig};
 use once_cell::sync::Lazy;
+use serde_json;
 
-// These are used as system state and as messages in original iperf.
-// Just using them for messages for now.
-#[allow(dead_code)]
-mod iperf_command {
-    pub const TEST_START: u8 = 1;
-    pub const TEST_RUNNING: u8 = 2;
-    pub const TEST_END: u8 = 4;
-    pub const PARAM_EXCHANGE: u8 = 9;
-    pub const CREATE_STREAMS: u8 = 10;
-    pub const SERVER_TERMINATE: u8 = 11;
-    pub const CLIENT_TERMINATE: u8 = 12;
-    pub const EXCHANGE_RESULTS: u8 = 13;
-    pub const DISPLAY_RESULTS: u8 = 14;
-    pub const IPERF_START: u8 = 15;
-    pub const IPERF_DONE: u8 = 16;
-}
 static SESSIONS: Lazy<Arc<Mutex<Vec<[u8; 36]>>>> = Lazy::new(|| Arc::new(Mutex::new(vec![])));
 
 fn main() -> io::Result<()> {
