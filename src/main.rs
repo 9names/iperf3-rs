@@ -76,7 +76,9 @@ async fn process(stream: TcpStream) -> io::Result<()> {
         buf_reader.read_exact(&mut buf).await?;
         if buf.is_ascii() {
             let string = String::from_utf8(buf.to_vec()).unwrap();
-            println!("config: {}", string);
+            println!("Config JSON string: {}", string);
+            let s: SessionConfig = serde_json::from_str(string.as_str())?;
+            println!("Config JSON decoded by serde: {:?}", s);
         }
 
         println!("ask the client to connect to a 2nd socket");
