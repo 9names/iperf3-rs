@@ -91,6 +91,10 @@ async fn process(stream: TcpStream) -> io::Result<()> {
                     println!("Only TCP mode is supported - dropping connection");
                     return Ok(());
                 }
+                if s.bidirectional.unwrap_or(false) {
+                    println!("Bidir mode not implemented - dropping connection");
+                    return Ok(());
+                }
                 sess.lock().await.insert(cookie, s);
             }
             true
