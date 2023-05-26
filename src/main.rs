@@ -161,11 +161,10 @@ async fn process(stream: TcpStream) -> io::Result<()> {
                 let mut bytes_total: u64 = 0;
                 let mut done = false;
                 while !done {
-                    let sz = buf_writer.write(&message).await?;
-                    if sz == 0 {
-                        done = true;
+                    match buf_writer.write(&message).await {
+                        Ok(sz) => bytes_total += sz as u64,
+                        Err(_) => done = true,
                     }
-                    bytes_total += sz as u64;
                 }
                 let gb_total = bytes_total as f32 / (1024f32 * 1024f32 * 1024f32);
                 let gbit_sec = gb_total * 8f32 / 10f32;
