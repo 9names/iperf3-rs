@@ -1,13 +1,12 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 
 use async_std::io::{self, prelude::*};
 use async_std::net::{TcpListener, TcpStream};
 use async_std::prelude::*;
+use async_std::sync::{Arc, Mutex};
 use async_std::task;
 use iperf3::{iperf_command, SessionConfig};
 use once_cell::sync::Lazy;
-use serde_json;
 
 static SESSIONS: Lazy<Arc<Mutex<HashMap<String, SessionConfig>>>> =
     Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
@@ -59,12 +58,12 @@ async fn process(stream: TcpStream) -> io::Result<()> {
         );
         return Ok(());
     }
+    let sess = SESSIONS.clone();
 
     // If this is the first we've seen this session cookie, assume we're the control channel
     let control_channel = if cookie.is_some() {
         let cookie = String::from(cookie.unwrap());
-        let sess = SESSIONS.clone();
-        let existing_session = sess.lock().unwrap().contains_key(&cookie);
+        let existing_session = sess.lock().await.contains_key(&cookie);
         if !existing_session {
             println!("control channel opened");
             // need to disable Nagle algorithm to ensure commands are sent promptly
@@ -86,7 +85,7 @@ async fn process(stream: TcpStream) -> io::Result<()> {
                 println!("Config JSON string: {}", string);
                 let s: SessionConfig = serde_json::from_str(string.as_str())?;
                 println!("Config JSON decoded by serde: {:?}", s);
-                sess.lock().unwrap().insert(cookie, s);
+                sess.lock().await.insert(cookie, s);
             }
             true
         } else {
@@ -126,7 +125,7 @@ async fn process(stream: TcpStream) -> io::Result<()> {
             let sess = SESSIONS.clone();
 
             println!("dropping session cookie now");
-            sess.lock().unwrap().remove(&String::from(cookie.unwrap()));
+            sess.lock().await.remove(&String::from(cookie.unwrap()));
         } else {
             println!("were expecting TEST_END, got {}", reply[0]);
         }
@@ -157,21 +156,43 @@ async fn process(stream: TcpStream) -> io::Result<()> {
         // this will be the second connection from the client
         println!("data channel opened");
         let mut message: [u8; 0x1000] = [0; 0x1000];
-        let mut bytes_total: u64 = 0;
-        let mut done = false;
-        while !done {
-            let sz = buf_reader.read(&mut message).await?;
-            if sz == 0 {
-                done = true;
+        if let Some(config) = sess.lock().await.get(&String::from(cookie.unwrap())) {
+            if config.reverse.unwrap_or(false) {
+                // Reverse mode - send data to client
+                let mut bytes_total: u64 = 0;
+                let mut done = false;
+                while !done {
+                    let sz = buf_writer.write(&message).await?;
+                    if sz == 0 {
+                        done = true;
+                    }
+                    bytes_total += sz as u64;
+                }
+                let gb_total = bytes_total as f32 / (1024f32 * 1024f32 * 1024f32);
+                let gbit_sec = gb_total * 8f32 / 10f32;
+                println!(
+                    "we're done sending. sent {} bytes ({}GB), {} GBits/sec",
+                    bytes_total, gb_total, gbit_sec
+                );
+            } else {
+                // Forward mode - receive data from client
+                let mut bytes_total: u64 = 0;
+                let mut done = false;
+                while !done {
+                    let sz = buf_reader.read(&mut message).await?;
+                    if sz == 0 {
+                        done = true;
+                    }
+                    bytes_total += sz as u64;
+                }
+                let gb_total = bytes_total as f32 / (1024f32 * 1024f32 * 1024f32);
+                let gbit_sec = gb_total * 8f32 / 10f32;
+                println!(
+                    "we're done receiving. received {} bytes ({}GB), {} GBits/sec",
+                    bytes_total, gb_total, gbit_sec
+                );
             }
-            bytes_total += sz as u64;
-        }
-        let gb_total = bytes_total as f32 / (1024f32 * 1024f32 * 1024f32);
-        let gbit_sec = gb_total * 8f32 / 10f32;
-        println!(
-            "we're done receiving. received {} bytes ({}GB), {} GBits/sec",
-            bytes_total, gb_total, gbit_sec
-        );
+        };
     }
     Ok(())
 }

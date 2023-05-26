@@ -25,7 +25,7 @@ pub struct SessionConfig {
     pub num: i32,
     pub blockcount: i32,
     pub parallel: i32,
-    pub reverse: bool,
+    pub reverse: Option<bool>,
     pub len: i32,
     pub pacing_timer: i32,
     pub client_version: String,
