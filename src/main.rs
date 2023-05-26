@@ -87,6 +87,10 @@ async fn process(stream: TcpStream) -> io::Result<()> {
                 println!("Config JSON string: {}", string);
                 let s: SessionConfig = serde_json::from_str(string.as_str())?;
                 println!("Config JSON decoded by serde: {:?}", s);
+                if !s.tcp.unwrap_or(false) {
+                    println!("Only TCP mode is supported - dropping connection");
+                    return Ok(());
+                }
                 sess.lock().await.insert(cookie, s);
             }
             true

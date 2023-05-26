@@ -19,7 +19,7 @@ pub mod iperf_command {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct SessionConfig {
-    pub tcp: bool,
+    pub tcp: Option<bool>,
     pub omit: i32,
     pub time: i32,
     pub num: i32,
