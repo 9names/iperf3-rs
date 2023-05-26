@@ -58,11 +58,13 @@ async fn process(stream: TcpStream) -> io::Result<()> {
         );
         return Ok(());
     }
+    // Cookie must be Some() now, unwrap it to save checking every time
+    let cookie = cookie.unwrap();
     let sess = SESSIONS.clone();
 
     // If this is the first we've seen this session cookie, assume we're the control channel
-    let control_channel = if cookie.is_some() {
-        let cookie = String::from(cookie.unwrap());
+    let control_channel = {
+        let cookie = String::from(cookie);
         let existing_session = sess.lock().await.contains_key(&cookie);
         if !existing_session {
             println!("control channel opened");
@@ -91,9 +93,6 @@ async fn process(stream: TcpStream) -> io::Result<()> {
         } else {
             false
         }
-    } else {
-        // Not an IO error, just an unhandled data stream.
-        return Ok(());
     };
 
     if control_channel {
@@ -125,7 +124,7 @@ async fn process(stream: TcpStream) -> io::Result<()> {
             let sess = SESSIONS.clone();
 
             println!("dropping session cookie now");
-            sess.lock().await.remove(&String::from(cookie.unwrap()));
+            sess.lock().await.remove(&String::from(cookie));
         } else {
             println!("were expecting TEST_END, got {}", reply[0]);
         }
@@ -156,7 +155,7 @@ async fn process(stream: TcpStream) -> io::Result<()> {
         // this will be the second connection from the client
         println!("data channel opened");
         let mut message: [u8; 0x1000] = [0; 0x1000];
-        if let Some(config) = sess.lock().await.get(&String::from(cookie.unwrap())) {
+        if let Some(config) = sess.lock().await.get(&String::from(cookie)) {
             if config.reverse.unwrap_or(false) {
                 // Reverse mode - send data to client
                 let mut bytes_total: u64 = 0;
