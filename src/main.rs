@@ -198,7 +198,7 @@ async fn process(stream: TcpStream) -> io::Result<()> {
                 None => (false, false),
             }
         };
-        if bidir {
+        let stream_mode = if bidir {
             let sess_type: DataStreamType =
                 if let Some(x) = SESSION_DATA.lock().await.get_mut(cookie) {
                     if x.num_receivers == 1 {
@@ -217,78 +217,60 @@ async fn process(stream: TcpStream) -> io::Result<()> {
             match sess_type {
                 DataStreamType::Sender => {
                     println!("Bidir Sender online");
-                    // Reverse mode - send data to client
-                    let mut bytes_total: u64 = 0;
-                    let mut done = false;
-                    while !done {
-                        match buf_writer.write(&message).await {
-                            Ok(sz) => bytes_total += sz as u64,
-                            Err(_) => done = true,
-                        }
-                    }
-                    let gb_total = bytes_total as f32 / (1024f32 * 1024f32 * 1024f32);
-                    let gbit_sec = gb_total * 8f32 / 10f32;
-                    println!(
-                        "we're done sending. sent {} bytes ({}GB), {} GBits/sec",
-                        bytes_total, gb_total, gbit_sec
-                    );
                 }
                 DataStreamType::Receiver => {
                     println!("Bidir Receiver online");
-                    // Forward mode - receive data from client
-                    let mut bytes_total: u64 = 0;
-                    let mut done = false;
-                    while !done {
-                        let sz = buf_reader.read(&mut message).await?;
-                        if sz == 0 {
-                            done = true;
-                        }
-                        bytes_total += sz as u64;
-                    }
-                    let gb_total = bytes_total as f32 / (1024f32 * 1024f32 * 1024f32);
-                    let gbit_sec = gb_total * 8f32 / 10f32;
-                    println!(
-                        "we're done receiving. received {} bytes ({}GB), {} GBits/sec",
-                        bytes_total, gb_total, gbit_sec
-                    );
                 }
                 DataStreamType::None => {
                     println!("FIXME: Unexpected stream type");
                 }
             }
+            sess_type
         } else if reverse {
-            // Reverse mode - send data to client
-            let mut bytes_total: u64 = 0;
-            let mut done = false;
-            while !done {
-                match buf_writer.write(&message).await {
-                    Ok(sz) => bytes_total += sz as u64,
-                    Err(_) => done = true,
-                }
-            }
-            let gb_total = bytes_total as f32 / (1024f32 * 1024f32 * 1024f32);
-            let gbit_sec = gb_total * 8f32 / 10f32;
-            println!(
-                "we're done sending. sent {} bytes ({}GB), {} GBits/sec",
-                bytes_total, gb_total, gbit_sec
-            );
+            DataStreamType::Sender
         } else {
-            // Forward mode - receive data from client
-            let mut bytes_total: u64 = 0;
-            let mut done = false;
-            while !done {
-                let sz = buf_reader.read(&mut message).await?;
-                if sz == 0 {
-                    done = true;
+            DataStreamType::Receiver
+        };
+        match stream_mode {
+            DataStreamType::Sender => {
+                // Reverse mode - send data to client
+                let mut bytes_total: u64 = 0;
+                let mut done = false;
+                while !done {
+                    match buf_writer.write(&message).await {
+                        Ok(sz) => bytes_total += sz as u64,
+                        Err(_) => done = true,
+                    }
                 }
-                bytes_total += sz as u64;
+                let gb_total = bytes_total as f32 / (1024f32 * 1024f32 * 1024f32);
+                let gbit_sec = gb_total * 8f32 / 10f32;
+                println!(
+                    "we're done sending. sent {} bytes ({}GB), {} GBits/sec",
+                    bytes_total, gb_total, gbit_sec
+                );
             }
-            let gb_total = bytes_total as f32 / (1024f32 * 1024f32 * 1024f32);
-            let gbit_sec = gb_total * 8f32 / 10f32;
-            println!(
-                "we're done receiving. received {} bytes ({}GB), {} GBits/sec",
-                bytes_total, gb_total, gbit_sec
-            );
+            DataStreamType::Receiver => {
+                // Forward mode - receive data from client
+                let mut bytes_total: u64 = 0;
+                let mut done = false;
+                while !done {
+                    let sz = buf_reader.read(&mut message).await?;
+                    if sz == 0 {
+                        done = true;
+                    }
+                    bytes_total += sz as u64;
+                }
+                let gb_total = bytes_total as f32 / (1024f32 * 1024f32 * 1024f32);
+                let gbit_sec = gb_total * 8f32 / 10f32;
+                println!(
+                    "we're done receiving. received {} bytes ({}GB), {} GBits/sec",
+                    bytes_total, gb_total, gbit_sec
+                );
+            }
+            DataStreamType::None => {
+                //
+                println!("Invalid mode, handle this!");
+            }
         }
     };
 
