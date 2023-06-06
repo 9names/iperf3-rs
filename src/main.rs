@@ -6,23 +6,12 @@ use async_std::net::{TcpListener, TcpStream};
 use async_std::prelude::*;
 use async_std::sync::{Arc, Mutex};
 use async_std::task;
-use iperf3::{iperf_command, SessionConfig};
+use iperf3::{iperf_command, SessionConfig, SessionData};
 use log::{debug, info};
 use once_cell::sync::Lazy;
 
 static SESSIONS: Lazy<Arc<Mutex<HashMap<String, SessionConfig>>>> =
     Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
-
-struct SessionData {
-    pub num_senders: i32,
-    pub num_receivers: i32,
-}
-
-enum DataStreamType {
-    Sender,
-    Receiver,
-    None,
-}
 
 static SESSION_DATA: Lazy<Arc<Mutex<HashMap<String, SessionData>>>> =
     Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
@@ -205,40 +194,40 @@ async fn process(stream: TcpStream) -> io::Result<()> {
             }
         };
         let stream_mode = if bidir {
-            let sess_type: DataStreamType =
+            let sess_type: iperf3::DataStreamType =
                 if let Some(x) = SESSION_DATA.lock().await.get_mut(cookie) {
                     if x.num_receivers == 1 {
                         x.num_receivers = 0;
                         // We need to set up the receiver first, or this doesn't work. TODO: find out why.
-                        DataStreamType::Receiver
+                        iperf3::DataStreamType::Receiver
                     } else if x.num_senders == 1 {
                         x.num_senders = 0;
-                        DataStreamType::Sender
+                        iperf3::DataStreamType::Sender
                     } else {
-                        DataStreamType::None
+                        iperf3::DataStreamType::None
                     }
                 } else {
-                    DataStreamType::None
+                    iperf3::DataStreamType::None
                 };
             match sess_type {
-                DataStreamType::Sender => {
+                iperf3::DataStreamType::Sender => {
                     debug!("Bidir Sender online");
                 }
-                DataStreamType::Receiver => {
+                iperf3::DataStreamType::Receiver => {
                     debug!("Bidir Receiver online");
                 }
-                DataStreamType::None => {
+                iperf3::DataStreamType::None => {
                     debug!("FIXME: Unexpected stream type");
                 }
             }
             sess_type
         } else if reverse {
-            DataStreamType::Sender
+            iperf3::DataStreamType::Sender
         } else {
-            DataStreamType::Receiver
+            iperf3::DataStreamType::Receiver
         };
         match stream_mode {
-            DataStreamType::Sender => {
+            iperf3::DataStreamType::Sender => {
                 // Reverse mode - send data to client
                 let mut bytes_total: u64 = 0;
                 let mut done = false;
@@ -255,7 +244,7 @@ async fn process(stream: TcpStream) -> io::Result<()> {
                     bytes_total, gb_total, gbit_sec
                 );
             }
-            DataStreamType::Receiver => {
+            iperf3::DataStreamType::Receiver => {
                 // Forward mode - receive data from client
                 let mut bytes_total: u64 = 0;
                 let mut done = false;
@@ -273,7 +262,7 @@ async fn process(stream: TcpStream) -> io::Result<()> {
                     bytes_total, gb_total, gbit_sec
                 );
             }
-            DataStreamType::None => {
+            iperf3::DataStreamType::None => {
                 //
                 info!("Invalid mode, handle this!");
             }

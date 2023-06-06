@@ -32,6 +32,19 @@ pub struct SessionConfig {
     pub client_version: String,
 }
 
+#[derive(Debug)]
+pub struct SessionData {
+    pub num_senders: i32,
+    pub num_receivers: i32,
+}
+
+#[derive(Debug)]
+pub enum DataStreamType {
+    Sender,
+    Receiver,
+    None,
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
