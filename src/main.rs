@@ -6,6 +6,7 @@ use async_std::prelude::*;
 use async_std::sync::{Arc, Mutex};
 use async_std::task;
 use iperf3::{iperf_command, SessionConfig};
+use log::{debug, info};
 use once_cell::sync::Lazy;
 
 static SESSIONS: Lazy<Arc<Mutex<HashMap<String, SessionConfig>>>> =
@@ -26,11 +27,12 @@ static SESSION_DATA: Lazy<Arc<Mutex<HashMap<String, SessionData>>>> =
     Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
 
 fn main() -> io::Result<()> {
+    env_logger::init();
     task::block_on(async {
         // All connections will come in on port 5201 by default
         // switch this to 0.0.0.0:5201 to be able to connect to this server from another machine
         let listener = TcpListener::bind("127.0.0.1:5201").await?;
-        println!("Listening on {}", listener.local_addr()?);
+        info!("Listening on {}", listener.local_addr()?);
 
         let mut incoming = listener.incoming();
 
@@ -46,7 +48,7 @@ fn main() -> io::Result<()> {
 
 async fn process(stream: TcpStream) -> io::Result<()> {
     let peer_addr = stream.peer_addr()?;
-    println!("Accepted from: {}", peer_addr);
+    info!("Accepted from: {}", peer_addr);
     let mut buf_reader = stream.clone();
     let mut buf_writer = stream;
     // The first thing an iperf3 client will send is
@@ -66,7 +68,7 @@ async fn process(stream: TcpStream) -> io::Result<()> {
 
     if cookie.is_none() {
         // TODO: better error handling here
-        println!(
+        info!(
             "Invalid session cookie, dropping connection from {}",
             peer_addr
         );
@@ -81,11 +83,11 @@ async fn process(stream: TcpStream) -> io::Result<()> {
         let cookie = String::from(cookie);
         let existing_session = sess.lock().await.contains_key(&cookie);
         if !existing_session {
-            println!("control channel opened");
+            debug!("control channel opened");
             // need to disable Nagle algorithm to ensure commands are sent promptly
             buf_writer.set_nodelay(true).unwrap();
 
-            println!("ask the client to send the config parameters");
+            debug!("ask the client to send the config parameters");
             buf_writer
                 .write_all(&[iperf_command::PARAM_EXCHANGE])
                 .await?;
@@ -93,20 +95,20 @@ async fn process(stream: TcpStream) -> io::Result<()> {
             let mut message_len: [u8; 4] = [0; 4];
             buf_reader.read_exact(&mut message_len).await?;
             let message_len = u32::from_be_bytes(message_len);
-            println!("Config JSON length {}", message_len);
+            debug!("Config JSON length {}", message_len);
             let mut buf: Vec<u8> = vec![0u8; message_len as usize];
             buf_reader.read_exact(&mut buf).await?;
             if buf.is_ascii() {
                 let string = String::from_utf8(buf.to_vec()).unwrap();
-                println!("Config JSON string: {}", string);
+                debug!("Config JSON string: {}", string);
                 let s: SessionConfig = serde_json::from_str(string.as_str())?;
-                println!("Config JSON decoded by serde: {:?}", s);
+                debug!("Config JSON decoded by serde: {:?}", s);
                 if !s.tcp.unwrap_or(false) {
-                    println!("Only TCP mode is supported - dropping connection");
+                    debug!("Only TCP mode is supported - dropping connection");
                     return Ok(());
                 }
                 if s.parallel != 1 {
-                    println!("This program does not support iperf parallel client streams, dropping this request")
+                    debug!("This program does not support iperf parallel client streams, dropping this request")
                 }
                 if s.bidirectional.unwrap_or(false) {
                     SESSION_DATA.lock().await.insert(
@@ -126,16 +128,16 @@ async fn process(stream: TcpStream) -> io::Result<()> {
     };
 
     if control_channel {
-        println!("ask the client to connect to a 2nd socket");
+        debug!("ask the client to connect to a 2nd socket");
         buf_writer
             .write_all(&[iperf_command::CREATE_STREAMS])
             .await?;
 
-        println!("ask the client to start the test");
+        debug!("ask the client to start the test");
         buf_writer.write_all(&[iperf_command::TEST_START]).await?;
 
         // should probably wait for some data on the other channel for this
-        println!("tell the client we've started running the test");
+        debug!("tell the client we've started running the test");
         buf_writer.write_all(&[iperf_command::TEST_RUNNING]).await?;
 
         // the client should eventually reply with a command
@@ -144,7 +146,7 @@ async fn process(stream: TcpStream) -> io::Result<()> {
 
         // We're hoping that it was TEST_END. check:
         if reply[0] == iperf_command::TEST_END {
-            println!("TEST_END command received from client");
+            debug!("TEST_END command received from client");
             // can't exchange results, we haven't calculated them.
             // buf_writer.write_all(&[iperf_command::EXCHANGE_RESULTS]);
 
@@ -153,37 +155,37 @@ async fn process(stream: TcpStream) -> io::Result<()> {
                 .await?;
             let sess = SESSIONS.clone();
 
-            println!("dropping session cookie now");
+            debug!("dropping session cookie now");
             sess.lock().await.remove(&String::from(cookie));
         } else {
-            println!("were expecting TEST_END, got {}", reply[0]);
+            debug!("were expecting TEST_END, got {}", reply[0]);
         }
 
         // Should be done now, check:
         let mut reply: [u8; 1] = [0; 1];
         buf_reader.read_exact(&mut reply).await?;
         if reply[0] == iperf_command::IPERF_DONE {
-            println!("Client says we're good, ship it!");
+            debug!("IPERF_DONE received from client.");
         } else {
-            println!("were expecting IPERF_DONE, got {}", reply[0]);
+            debug!("were expecting IPERF_DONE, got {}", reply[0]);
         }
 
         // Collect any data remaining in the channel, it's about to close
         let mut buf: Vec<u8> = vec![];
         let _ = buf_reader.read_to_end(&mut buf).await;
         if !buf.is_empty() {
-            println!("Printing out any remaining data in control channel...");
+            debug!("Printing out any remaining data in control channel...");
             if buf.is_ascii() {
                 let string = String::from_utf8(buf).unwrap();
-                println!("buf: {}", string);
+                debug!("buf: {}", string);
             } else {
-                println!("buf: {:?}", buf);
+                debug!("buf: {:?}", buf);
             }
         }
-        println!("control channel is done");
+        debug!("control channel is done");
     } else {
         // this will be the second connection from the client
-        println!("data channel opened");
+        debug!("data channel opened");
         let mut message: [u8; 0x1000] = [0; 0x1000];
 
         // unpack configuration data now so we don't hold this lock too long
@@ -216,13 +218,13 @@ async fn process(stream: TcpStream) -> io::Result<()> {
                 };
             match sess_type {
                 DataStreamType::Sender => {
-                    println!("Bidir Sender online");
+                    debug!("Bidir Sender online");
                 }
                 DataStreamType::Receiver => {
-                    println!("Bidir Receiver online");
+                    debug!("Bidir Receiver online");
                 }
                 DataStreamType::None => {
-                    println!("FIXME: Unexpected stream type");
+                    debug!("FIXME: Unexpected stream type");
                 }
             }
             sess_type
@@ -244,7 +246,7 @@ async fn process(stream: TcpStream) -> io::Result<()> {
                 }
                 let gb_total = bytes_total as f32 / (1024f32 * 1024f32 * 1024f32);
                 let gbit_sec = gb_total * 8f32 / 10f32;
-                println!(
+                info!(
                     "we're done sending. sent {} bytes ({}GB), {} GBits/sec",
                     bytes_total, gb_total, gbit_sec
                 );
@@ -262,14 +264,14 @@ async fn process(stream: TcpStream) -> io::Result<()> {
                 }
                 let gb_total = bytes_total as f32 / (1024f32 * 1024f32 * 1024f32);
                 let gbit_sec = gb_total * 8f32 / 10f32;
-                println!(
+                info!(
                     "we're done receiving. received {} bytes ({}GB), {} GBits/sec",
                     bytes_total, gb_total, gbit_sec
                 );
             }
             DataStreamType::None => {
                 //
-                println!("Invalid mode, handle this!");
+                info!("Invalid mode, handle this!");
             }
         }
     };
