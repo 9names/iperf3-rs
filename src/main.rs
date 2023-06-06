@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use async_std::io::{self, prelude::*};
 use async_std::net::{TcpListener, TcpStream};
@@ -133,6 +134,9 @@ async fn process(stream: TcpStream) -> io::Result<()> {
             .write_all(&[iperf_command::CREATE_STREAMS])
             .await?;
 
+        // TODO: wait for connections, then send test start
+        // for now, a sleep will suffice
+        task::sleep(Duration::from_secs(1)).await;
         debug!("ask the client to start the test");
         buf_writer.write_all(&[iperf_command::TEST_START]).await?;
 
